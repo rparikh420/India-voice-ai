@@ -1,0 +1,5 @@
+# Exclude secrets from Cursor indexing / AI context.
+# If you @-mention .env or paste it, it can still appear in that chat turn.
+.env
+.env.local
+*.pem

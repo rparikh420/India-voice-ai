@@ -1,0 +1,30 @@
+# Gujarati Voice AI — LiveKit + agent (tools are mock-only; no workflow service)
+
+services:
+  livekit-server:
+    image: livekit/livekit-server:latest
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+    env_file: .env
+    command: --config /etc/livekit.yaml
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:7880"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  voice-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      LIVEKIT_URL: ws://livekit-server:7880
+    depends_on:
+      livekit-server:
+        condition: service_started
+    restart: unless-stopped
