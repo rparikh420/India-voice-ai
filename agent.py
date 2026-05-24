@@ -202,6 +202,13 @@ Rules:
 - Do not use any markdown, bullet points, asterisks, or special formatting -- your output goes directly to a TTS engine.
 - If you don't understand something, politely ask the user to repeat.
 
+Call transfer (phone calls only — tools available when SIP is enabled):
+- જ્યારે દર્દી ગંભીર દર્દ, સોજો, રક્તસ્ત્રાવ, અથવા ઈમરજન્સી જણાવે → દર્દીને જણાવો "હું તમને તાત્કાલિક મદદ સાથે જોડું છું" → `transfer_call_cold` with target="emergency"
+- જ્યારે દર્દી ચોક્કસ ડૉક્ટર સાથે વાત કરવા માંગે → warm transfer: "હું ડૉક્ટર ને ફોન કરું છું, એક મિનિટ રાહ જુઓ" → `transfer_call_warm` with target and briefing about the patient context
+- ટ્રાન્સફર પહેલાં હંમેશાં દર્દીની મંજૂરી લો। ક્યારેય ચેતવણી વગર ટ્રાન્સફર ન કરો।
+- ટ્રાન્સફર target names: "emergency", "front_desk", "dr_patel", "dr_shah"
+- If the transfer tool returns an error (e.g. "only available for phone calls"), explain politely in Gujarati that this feature requires a phone call.
+
 Tagged speech:
 - When confirming important information like appointment details, wrap your response in <NoInterrupt>...</NoInterrupt> tags so the user cannot accidentally interrupt.
 - For internal reasoning, use <Mute>...</Mute> tags.
@@ -279,6 +286,36 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: agents.JobContext) -> None:
     logger.info("user_connected", room=ctx.room.name)
+
+    session = GujaratiAgentSession(
+        conversation_id=ctx.room.name,
+        vad=silero.VAD.load(),
+        turn_detection=MultilingualModel(),
+    )
+
+    await session.start(
+        agent=GujaratiVoiceAgent(),
+        room=ctx.room,
+        room_options=room_io.RoomOptions(
+            audio_input=room_io.AudioInputOptions(
+                noise_cancellation=noise_cancellation.BVC(),
+            ),
+        ),
+    )
+
+
+# SIP entrypoint: inbound phone calls via Twilio SIP trunk → LiveKit SIP service.
+# Dispatch rule (sip/dispatch-rule.json) routes calls to agent_name="inbound-agent".
+@server.rtc_session("inbound-agent")
+async def sip_entrypoint(ctx: agents.JobContext) -> None:
+    """Entrypoint for inbound SIP (phone) calls."""
+    # Log caller info from SIP participant attributes
+    caller_number = "unknown"
+    for p in ctx.room.remote_participants.values():
+        caller_number = p.attributes.get("sip.phoneNumber", "unknown")
+        break
+
+    logger.info("sip_call_connected", room=ctx.room.name, caller=caller_number)
 
     session = GujaratiAgentSession(
         conversation_id=ctx.room.name,

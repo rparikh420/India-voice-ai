@@ -13,8 +13,9 @@ from typing import Any
 from livekit.agents import RunContext, function_tool
 
 from booking_email import send_booking_confirmation_email
-from config import CLINIC_NAME, booking_email_configured
+from config import CLINIC_NAME, SIP_ENABLED, SIP_OUTBOUND_TRUNK_ID, booking_email_configured
 from observability import logger
+from sip_helpers import mute_sip_participant, resolve_transfer_target, transfer_cold, transfer_warm_dial
 
 MAX_BOOKING_EMAIL_RECIPIENTS = 10
 
@@ -315,6 +316,177 @@ async def cancel_appointment(
     return stub_cancel_appointment(appointment_id)
 
 
+# ---------------------------------------------------------------------------
+# SIP transfer tools (only active when SIP_ENABLED=true)
+# ---------------------------------------------------------------------------
+
+
+def _find_sip_participant(context: RunContext):
+    """Find the SIP participant in the room, or None for browser calls."""
+    from livekit import rtc
+
+    room = getattr(context.session, "room", None)
+    if room is None:
+        return None
+    for p in room.remote_participants.values():
+        if p.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+            return p
+    return None
+
+
+def _get_sip_audio_track_sid(participant) -> str | None:
+    """Get the first published audio track SID from a participant."""
+    for pub in participant.track_publications.values():
+        if pub.kind.name == "KIND_AUDIO":
+            return pub.sid
+    return None
+
+
+@function_tool()
+async def transfer_call_cold(
+    context: RunContext,
+    target: str,
+) -> dict[str, Any]:
+    """Transfer the caller directly to another phone number (cold/blind transfer).
+
+    The caller is immediately connected to the target; the AI agent exits.
+    Use for: emergency line, front desk, or a specific doctor.
+
+    Args:
+        target: One of "emergency", "front_desk", "dr_patel", "dr_shah",
+                or a full phone number like "+919876543210".
+    """
+    context.disallow_interruptions()
+
+    phone = resolve_transfer_target(target)
+    if not phone:
+        logger.info("tool_transfer_cold_blocked", target=target, reason="unknown_target")
+        return {"error": f"Unknown transfer target: {target}"}
+
+    sip_participant = _find_sip_participant(context)
+    if not sip_participant:
+        logger.info("tool_transfer_cold_blocked", target=target, reason="no_sip_participant")
+        return {"error": "Transfer is only available for phone calls, not browser sessions."}
+
+    logger.info(
+        "tool_transfer_cold",
+        target=target,
+        phone=phone,
+        participant=sip_participant.identity,
+    )
+
+    room_name = context.session.room.name
+    result = await transfer_cold(room_name, sip_participant.identity, phone)
+    return result
+
+
+@function_tool()
+async def transfer_call_warm(
+    context: RunContext,
+    target: str,
+    briefing: str,
+) -> dict[str, Any]:
+    """Transfer the caller with a warm handoff (agent briefs the target first).
+
+    Steps: mute caller → dial target → agent briefs target → unmute caller → agent exits.
+    Use when the patient wants to speak to a specific doctor.
+
+    Args:
+        target: One of "dr_patel", "dr_shah", or a full phone number.
+        briefing: What to tell the target about the patient
+                  (e.g. "Patient Rajesh, tooth pain since 2 days, wants consultation").
+    """
+    import asyncio
+    import time
+
+    context.disallow_interruptions()
+
+    phone = resolve_transfer_target(target)
+    if not phone:
+        logger.info("tool_transfer_warm_blocked", target=target, reason="unknown_target")
+        return {"error": f"Unknown transfer target: {target}"}
+
+    if not SIP_OUTBOUND_TRUNK_ID:
+        logger.info("tool_transfer_warm_blocked", reason="no_outbound_trunk")
+        return {"error": "Outbound SIP trunk not configured (SIP_OUTBOUND_TRUNK_ID)."}
+
+    sip_participant = _find_sip_participant(context)
+    if not sip_participant:
+        logger.info("tool_transfer_warm_blocked", target=target, reason="no_sip_participant")
+        return {"error": "Transfer is only available for phone calls, not browser sessions."}
+
+    track_sid = _get_sip_audio_track_sid(sip_participant)
+    room_name = context.session.room.name
+
+    logger.info(
+        "tool_transfer_warm",
+        target=target,
+        phone=phone,
+        participant=sip_participant.identity,
+        briefing_len=len(briefing),
+    )
+
+    # Step 1: Mute the caller so they don't hear the briefing
+    if track_sid:
+        try:
+            await mute_sip_participant(room_name, sip_participant.identity, track_sid, muted=True)
+        except Exception as exc:
+            logger.warning("tool_transfer_warm_mute_failed", error=str(exc))
+
+    # Step 2: Dial the target into the same room
+    doctor_identity = f"sip-doctor-{int(time.time())}"
+    try:
+        dial_result = await asyncio.wait_for(
+            transfer_warm_dial(
+                sip_trunk_id=SIP_OUTBOUND_TRUNK_ID,
+                call_to=phone,
+                room_name=room_name,
+                participant_identity=doctor_identity,
+                participant_name=target,
+            ),
+            timeout=30.0,
+        )
+    except asyncio.TimeoutError:
+        # Doctor didn't answer — unmute caller and report failure
+        if track_sid:
+            try:
+                await mute_sip_participant(
+                    room_name, sip_participant.identity, track_sid, muted=False
+                )
+            except Exception:
+                pass
+        logger.warning("tool_transfer_warm_timeout", target=target, phone=phone)
+        return {
+            "status": "failed",
+            "error": "Target did not answer within 30 seconds. Caller has been unmuted.",
+        }
+
+    if dial_result.get("status") == "error":
+        # Dial failed — unmute caller
+        if track_sid:
+            try:
+                await mute_sip_participant(
+                    room_name, sip_participant.identity, track_sid, muted=False
+                )
+            except Exception:
+                pass
+        return dial_result
+
+    # Step 3: Return success — agent should now speak the briefing to the room
+    # (only the doctor hears since caller is muted), then unmute the caller.
+    return {
+        "status": "warm_transfer_connected",
+        "doctor_identity": doctor_identity,
+        "caller_identity": sip_participant.identity,
+        "caller_track_sid": track_sid,
+        "briefing": briefing,
+        "instruction": (
+            "Doctor is now in the room. Speak the briefing aloud (doctor can hear, caller is muted). "
+            "After briefing, the caller will be unmuted automatically. Then say goodbye and exit."
+        ),
+    }
+
+
 ALL_TOOLS = [
     simulate_workflow,
     lookup_customer,
@@ -322,3 +494,6 @@ ALL_TOOLS = [
     check_availability,
     cancel_appointment,
 ]
+
+if SIP_ENABLED:
+    ALL_TOOLS.extend([transfer_call_cold, transfer_call_warm])

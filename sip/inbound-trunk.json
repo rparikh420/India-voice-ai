@@ -1,0 +1,7 @@
+{
+  "trunk": {
+    "name": "twilio-inbound",
+    "numbers": ["+1XXXXXXXXXX"],
+    "krispEnabled": true
+  }
+}

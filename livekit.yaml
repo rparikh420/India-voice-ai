@@ -9,3 +9,5 @@ rtc:
   tcp_port: 7881
 # keys:
 #   devkey: secret
+redis:
+  address: localhost:6379

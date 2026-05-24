@@ -109,6 +109,78 @@ Search agent stdout (JSON lines) for:
 | `book_appointment` | Mock ledger + optional Resend; requires `reason_for_visit`, `recipient_emails`, `email_address_user_confirmed` |
 | `lookup_customer` | Mock CRM (still has sample email in JSON — not auto-used for send) |
 | `cancel_appointment`, `simulate_workflow` | Mock |
+| `transfer_call_cold` | SIP only (`SIP_ENABLED=true`). Blind transfer — caller sent directly to target number |
+| `transfer_call_warm` | SIP only. Warm handoff — mute caller, dial target, agent briefs, unmute caller |
+
+---
+
+## SIP / Telephony (inbound phone calls + call transfer)
+
+**Branch:** `feature/twilio-sip-inbound-calls`
+
+### Architecture
+
+```
+Phone caller → Twilio SIP Trunk → livekit/sip (port 5060) → Redis → livekit-server → voice-agent (inbound-agent)
+```
+
+### Infrastructure
+
+- **Redis** (`redis:7-alpine`) — required by LiveKit SIP service for session state
+- **`livekit/sip`** container — `network_mode: host`, needs `SIP_CONFIG_BODY` env var
+- **Ports required:** 5060 (SIP signaling, UDP/TCP) + 10000-20000 (RTP media, UDP) — must be reachable from public internet
+- **`livekit.yaml`** — has `redis: address: localhost:6379`
+
+### SIP config (applied once via `lk` CLI)
+
+```bash
+lk sip create-inbound-trunk sip/inbound-trunk.json
+lk sip create-outbound-trunk sip/outbound-trunk.json   # for warm transfer
+lk sip create-dispatch-rule sip/dispatch-rule.json
+```
+
+- **Inbound trunk:** accepts calls from Twilio on configured phone numbers
+- **Outbound trunk:** dials out for warm transfers via Twilio SIP domain
+- **Dispatch rule:** `dispatchRuleIndividual` with `roomPrefix: "call-"` — each caller gets own room
+
+### Agent entrypoints (`agent.py`)
+
+| Entrypoint | agent_name | Use |
+|-----------|------------|-----|
+| `entrypoint()` | (none — auto-dispatch) | Browser WebRTC |
+| `sip_entrypoint()` | `"inbound-agent"` | Phone calls via SIP |
+
+Both use `GujaratiVoiceAgent` with the same prompt/tools. SIP entrypoint logs `sip.phoneNumber` from participant attributes.
+
+### Transfer tools
+
+- **`transfer_call_cold(target)`** — blind transfer via `TransferSIPParticipantRequest`. Target: "emergency", "front_desk", "dr_patel", "dr_shah", or raw "+91..." number.
+- **`transfer_call_warm(target, briefing)`** — mutes caller → dials target via `CreateSIPParticipantRequest` into same room → agent speaks briefing → unmutes caller. 30s timeout if target doesn't answer.
+- Both tools only available when `SIP_ENABLED=true`; return error for browser sessions.
+
+### Helper module (`sip_helpers.py`)
+
+- `get_livekit_api()` — creates `api.LiveKitAPI` from env config
+- `resolve_transfer_target(target)` — maps symbolic names to phone numbers
+- `transfer_cold(room, participant, number)` — LiveKit SIP transfer API
+- `transfer_warm_dial(trunk_id, number, room, identity, name)` — outbound SIP call
+- `mute_sip_participant(room, identity, track_sid, muted)` — mute/unmute audio
+
+### New env vars
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIP_ENABLED` | `false` | Enable SIP transfer tools in ALL_TOOLS |
+| `TRANSFER_EMERGENCY_NUMBER` | `""` | Emergency/front desk transfer target |
+| `TRANSFER_DOCTOR_NUMBERS` | `{}` | JSON dict of doctor name → phone number |
+| `SIP_OUTBOUND_TRUNK_ID` | `""` | LiveKit outbound trunk ID (for warm transfer) |
+
+### Twilio setup (manual)
+
+1. Buy a phone number on Twilio console
+2. Create an Elastic SIP Trunk → set origination URI to `sip:YOUR_PUBLIC_IP:5060;transport=udp`
+3. Point phone number voice config to the SIP trunk
+4. For outbound (warm transfer): create SIP domain + credential list on Twilio
 
 ---
 
@@ -166,38 +238,56 @@ Search agent stdout (JSON lines) for:
 
 ---
 
+## Changelog — 2026-03-30 session (Twilio SIP inbound calls + call transfer)
+
+1. **SIP infrastructure:** Added `redis` + `livekit/sip` to `docker-compose.yml`; `redis` block in `livekit.yaml`.
+2. **SIP config files:** `sip/inbound-trunk.json`, `sip/outbound-trunk.json`, `sip/dispatch-rule.json` — applied via `lk` CLI.
+3. **SIP helpers (`sip_helpers.py`):** LiveKit SIP API wrappers — `transfer_cold`, `transfer_warm_dial`, `mute_sip_participant`, `resolve_transfer_target`, `get_livekit_api`.
+4. **Transfer tools (`tools.py`):** `transfer_call_cold` (blind transfer) + `transfer_call_warm` (mute caller → dial target → brief → unmute). Conditional on `SIP_ENABLED=true`.
+5. **SIP entrypoint (`agent.py`):** `@server.rtc_session("inbound-agent")` — second entrypoint for phone calls via SIP dispatch rule. Logs caller number from SIP participant attributes.
+6. **System prompt:** Added Gujarati transfer rules (emergency → cold transfer, doctor → warm transfer, always confirm before transferring).
+7. **Config:** `SIP_ENABLED`, `TRANSFER_EMERGENCY_NUMBER`, `TRANSFER_DOCTOR_NUMBERS` (JSON), `SIP_OUTBOUND_TRUNK_ID` in `config.py` + `.env.example`.
+8. **Tests:** `tests/test_transfer.py` — 16 tests covering helpers + tools (resolve target, cold transfer, warm transfer, error cases).
+9. **Design spec:** `docs/superpowers/specs/2026-03-30-twilio-sip-inbound-calls-design.md`.
+
+---
+
 ## Suggested next steps (prioritized)
 
 **Product / demo**
 
-1. **Orchestrator parity:** If LangGraph is used again, add `email_address_user_confirmed` (or equivalent) to `REQUIRED_FIELDS` / `confirm_action` / tests — avoid truthiness bugs on `"yes"`/`"no"` fields.
-2. **Auto lookup on answer:** Optional `INBOUND_CALLER_PHONE` or LiveKit participant identity → `lookup_customer` + inject context before first reply (still open from older backlog).
-3. **Real calendar:** Replace `stub_check_availability` / booking with HTTP; keep same JSON shapes or update tool docstrings.
-4. **Production email:** Verify domain in Resend; stop using `onboarding@resend.dev` for real patients.
-5. **Post-process TTS:** Optional code pass to collapse accidental `વાગ્યા વાગ્યા` if the model still slips.
+1. **Twilio setup:** Buy phone number, configure SIP trunk, apply LiveKit SIP configs via `lk` CLI, open firewall ports.
+2. **Auto lookup on answer:** Use `sip.phoneNumber` from SIP participant → `lookup_customer` + inject context before first reply.
+3. **Dental prompt tree:** Branch conversation based on patient intent (emergency, routine, specific treatment, follow-up) with deeper domain questions.
+4. **Real calendar:** Replace `stub_check_availability` / booking with HTTP; keep same JSON shapes.
+5. **Production email:** Verify domain in Resend; stop using `onboarding@resend.dev` for real patients.
+6. **Post-process TTS:** Optional code pass to collapse accidental `વાગ્યા વાગ્યા` if the model still slips.
+7. **Orchestrator parity:** If LangGraph is used again, add `email_address_user_confirmed` gate.
 
 **Hardening**
 
-6. **Rotate secrets** if `.env` or API keys ever appeared in chat logs.
-7. **`GET /emails/{id}`:** Use dashboard or full-access API key if automated delivery checks are needed.
+8. **Rotate secrets** if `.env` or API keys ever appeared in chat logs.
+9. **`GET /emails/{id}`:** Use dashboard or full-access API key if automated delivery checks are needed.
 
 ---
 
 ## Quick file map
 
 ```
-research/
-  agent.py           # GujaratiVoiceAgent, prompts, rtc_session, tts/tag handling
-  tools.py           # stubs + ALL_TOOLS + book_appointment (await Resend)
+  agent.py           # GujaratiVoiceAgent, prompts, rtc_session (browser + SIP), tts/tag handling
+  tools.py           # stubs + ALL_TOOLS + book_appointment + transfer tools (SIP_ENABLED)
+  sip_helpers.py     # LiveKit SIP API wrappers (transfer, dial, mute)
   booking_email.py   # Resend HTTPS (urllib + User-Agent), primary + BOOKING_EMAIL_TO fallback
-  config.py          # env path load, CLINIC_NAME, Resend, LOG_BOOKING_EMAIL_ADDRESSES
+  config.py          # env path load, CLINIC_NAME, Resend, SIP config
   session.py         # GujaratiAgentSession, transcript_closed
   observability.py   # structlog
   orchestrator.py    # LangGraph (stubs; no Resend in execute_action)
   tagged_speech.py   # NoInterrupt / Mute
   serve_dev_ui.py    # Local UI :8765
   frontend/index.html
-  tests/test_tools.py # book_appointment + email confirmation (mocked send)
+  sip/               # LiveKit SIP trunk + dispatch rule JSON configs (applied via lk CLI)
+  tests/test_tools.py     # book_appointment + email confirmation (mocked send)
+  tests/test_transfer.py  # SIP transfer tools + helpers
   context.md         # this file
 ```
 

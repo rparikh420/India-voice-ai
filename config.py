@@ -57,6 +57,29 @@ LOG_BOOKING_EMAIL_ADDRESSES: bool = _LOG_BOOKING_EMAIL_RAW not in ("0", "false",
 
 
 # ---------------------------------------------------------------------------
+# SIP / Telephony (Twilio SIP trunking via LiveKit SIP service)
+# ---------------------------------------------------------------------------
+SIP_ENABLED: bool = os.getenv("SIP_ENABLED", "false").lower() == "true"
+TRANSFER_EMERGENCY_NUMBER: str = os.getenv("TRANSFER_EMERGENCY_NUMBER", "")
+SIP_OUTBOUND_TRUNK_ID: str = os.getenv("SIP_OUTBOUND_TRUNK_ID", "")
+
+
+def _parse_doctor_numbers() -> dict[str, str]:
+    """Parse TRANSFER_DOCTOR_NUMBERS JSON env var into a dict of name→phone."""
+    import json as _json
+
+    raw = os.getenv("TRANSFER_DOCTOR_NUMBERS", "{}")
+    try:
+        d = _json.loads(raw)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+TRANSFER_DOCTOR_NUMBERS: dict[str, str] = _parse_doctor_numbers()
+
+
+# ---------------------------------------------------------------------------
 # Observability
 # ---------------------------------------------------------------------------
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")

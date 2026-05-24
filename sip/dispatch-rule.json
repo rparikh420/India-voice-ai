@@ -1,0 +1,8 @@
+{
+  "rule": {
+    "dispatchRuleIndividual": {
+      "roomPrefix": "call-"
+    }
+  },
+  "name": "inbound-calls"
+}
