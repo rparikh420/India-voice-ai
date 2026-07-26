@@ -16,6 +16,11 @@ The second one is what you actually want for real coding work. It is also the on
 **outside every containment layer this project has built**. Section 6 is the most important part of
 this document; if you read one section, read that one.
 
+`openclaw.config.json5` is already wired for this: an `acp` block with `allowedAgents: ["opencode"]`,
+an `opencode` agent entry, a `#code` Discord binding, and `permissionMode: "approve-all"` held in
+check by [`worktree.sh`](../worktree.sh). This document explains why each of those is set the way it
+is, and what it would take to add Claude Code beside it.
+
 ---
 
 ## Corrections found while researching this
@@ -151,16 +156,24 @@ report a vendor auth error and you will spend an hour blaming OpenClaw for it.
 
 ### Recommendation for a Claude-Code-and-OpenCode setup
 
-| | Choice |
-|---|---|
-| Default harness | `claude` — set `acp.defaultAgent: "claude"` |
-| Second harness | `opencode` — for anything you'd rather bill to OpenRouter |
-| `allowedAgents` | `["claude", "opencode"]` and nothing else |
-| Health probe agent | `claude` (`probeAgent`, otherwise it defaults to `codex` and reports a false failure) |
+`openclaw.config.json5` currently ships `allowedAgents: ["opencode"]` — one harness, deliberately.
+That is a defensible starting point, and the reasoning in the config comment is right: a one-entry
+allowlist means a model cannot decide some other harness would be convenient. Add `claude` when you
+want the better agentic loop, and not before you have authenticated the Claude Code CLI.
+
+| | Choice | Shipped config |
+|---|---|---|
+| Primary harness | `claude` — best coding loop, confirmed `session/load` resume | not yet added |
+| Second harness | `opencode` — the only harness that can reuse your OpenRouter key ([§8](#8-model-routing-and-cost)) | **active** |
+| `acp.defaultAgent` | `claude` once added; otherwise `opencode` | unset |
+| `acp.allowedAgents` | `["claude", "opencode"]` and nothing else | `["opencode"]` |
+| `probeAgent` | Match the primary; otherwise `/acp doctor` lies to you | unset — see below |
 
 That last row is a real trap. The `acpx` startup probe defaults to the first entry in
-`acp.allowedAgents`, or to `codex` when that list is unset. If you never installed the Codex CLI,
-`/acp doctor` reports an unhealthy backend that is in fact perfectly fine.
+`acp.allowedAgents`, or to `codex` when that list is unset. The shipped config sets
+`allowedAgents: ["opencode"]` and no `probeAgent`, so the probe currently resolves to `opencode` —
+correct today, and silently wrong the moment you prepend `claude` to that list without installing
+the Claude Code CLI. Set `probeAgent` explicitly rather than relying on list order.
 
 ---
 
@@ -270,6 +283,9 @@ error), so the operator path is the agent default.
 
 ### 4.1 The baseline
 
+`openclaw.config.json5` already carries a working ACP block. This is that block with the optional
+keys it omits filled in and annotated:
+
 ```json5
 {
   acp: {
@@ -277,10 +293,10 @@ error), so the operator path is the agent default.
     dispatch: { enabled: true },   // false pauses automatic thread dispatch,
                                    // but explicit sessions_spawn still works
     backend: "acpx",
-    defaultAgent: "claude",
+    defaultAgent: "opencode",      // not set in the shipped config
     // The allowlist is the cheapest real control you have. Two entries, not
     // seventeen. Every id you add is a CLI whose own permission model you are
-    // now trusting on this host.
+    // now trusting on this host. Shipped config has ["opencode"] only.
     allowedAgents: ["claude", "opencode"],
     stream: { deliveryMode: "live" },
   },
@@ -290,12 +306,20 @@ error), so the operator path is the agent default.
       acpx: {
         enabled: true,
         config: {
-          // Defaults are approve-reads / fail. See §6.3 before changing these.
-          permissionMode: "approve-reads",
+          // The shipped config sets approve-all. That is the right call HERE
+          // and only here — it is defensible because worktree.sh confines
+          // every session to a throwaway checkout. Read §6.3 and §6.6 before
+          // you keep it, and especially before you point a session at a live
+          // working copy.
+          permissionMode: "approve-all",
+          // Not set in the shipped config, so it defaults to `fail`. Harmless
+          // alongside approve-all, since nothing prompts. Matters the moment
+          // you tighten permissionMode.
           nonInteractivePermissions: "fail",
           // Otherwise defaults to the first allowedAgents entry, or `codex`
-          // when allowedAgents is unset — a false failure if Codex isn't installed.
-          probeAgent: "claude",
+          // when allowedAgents is unset — a false failure if Codex isn't
+          // installed. Set it to whichever harness you actually installed.
+          probeAgent: "opencode",
           timeoutSeconds: 120,
           // Both MCP bridges are default-off. Leave them off. See §6.4.
           pluginToolsMcpBridge: false,
@@ -319,49 +343,61 @@ error), so the operator path is the agent default.
 
 ### 4.2 Agent entries
 
-This project's `openclaw.config.json5` defines `main`, `triage`, and `dev`. **None of them can run
-ACP**, and `dev` least of all — it is sandboxed, and sandboxed sessions are hard-blocked from
-spawning ACP sessions. ACP needs a fourth agent that is honest about being uncontained.
+The original three agents were `main`, `triage`, and `dev`. **None of them can run ACP**, and `dev`
+least of all — it is sandboxed, and sandboxed sessions are hard-blocked from spawning ACP sessions.
+So the config now carries a fourth entry, `opencode`, whose defining property is that it is honest
+about being uncontained:
 
 ```json5
 {
   agents: {
     entries: {
-      // ── code: the ACP control-plane agent ──────────────────────────────
-      // NOT sandboxed, because it cannot be — see §6. Everything this agent
-      // touches runs on the host as your macOS user. It exists to hold ACP
-      // sessions and nothing else: no email, no calendar, no memory, no
-      // untrusted input, ever.
-      code: {
-        workspace: "~/code",
+      // ── opencode: external coding harness via ACP ────────────────────────
+      // NOT an OpenClaw agent in the usual sense. OpenClaw is only the control
+      // plane; OpenCode runs as its own CLI on the host with its own model
+      // config, its own auth, and its own permission model.
+      //
+      // OpenClaw's sandbox does NOT wrap ACP execution. The `sandbox` block
+      // that protects `dev` does nothing here. Containment is `cwd` — which is
+      // why every session is pointed at a throwaway worktree. See §6.
+      opencode: {
         runtime: {
           type: "acp",
           acp: {
-            agent: "claude",       // harness id from §2
+            agent: "opencode",        // harness id from §2
             backend: "acpx",
-            mode: "persistent",    // persistent | oneshot  (NOT run | session)
-            cwd: "~/code/primary-project",
+            mode: "persistent",       // persistent | oneshot (NOT run | session)
+            cwd: "~/code/worktrees",  // parent dir; worktree.sh overrides
+                                      // per-spawn with an isolated --cwd
           },
         },
+      },
+    },
+  },
+}
+```
+
+To add Claude Code alongside it, add `"claude"` to `acp.allowedAgents` and a second entry of the
+same shape:
+
+```json5
+{
+  agents: {
+    entries: {
+      claudecode: {
+        runtime: {
+          type: "acp",
+          acp: { agent: "claude", backend: "acpx", mode: "persistent",
+                 cwd: "~/code/worktrees" },
+        },
         // This agent's own OpenClaw model barely matters — the harness runs
-        // its own loop with its own model. This is only for the turns where
-        // OpenClaw itself answers. See §8.
+        // its own loop with its own model. This only covers turns where
+        // OpenClaw itself answers. And deliberately no `subagents.model`: see §8.
         model: { primary: "openrouter/moonshotai/kimi-k2.6" },
         tools: {
           profile: "messaging",
           exec: { security: "deny" },   // OpenClaw-side exec. Does NOT constrain
                                         // the harness. See §6.2.
-          allow: ["github__*"],
-        },
-        memory: { search: { rememberAcrossConversations: false } },
-      },
-
-      // A second entry for OpenCode, pointed at a different tree.
-      codeAlt: {
-        workspace: "~/code",
-        runtime: {
-          type: "acp",
-          acp: { agent: "opencode", backend: "acpx", mode: "persistent" },
         },
         memory: { search: { rememberAcrossConversations: false } },
       },
@@ -370,8 +406,10 @@ spawning ACP sessions. ACP needs a fourth agent that is honest about being uncon
 }
 ```
 
-Keep `dev` exactly as it is. It remains the right tool for untrusted input, and it is the only
-coding path in this setup that is actually contained.
+Note what these entries deliberately lack: no email, no calendar, no cross-conversation memory, and
+no `sandbox` block — because a `sandbox` block here would be decorative, and a decorative security
+control is worse than none. Keep `dev` exactly as it is. It remains the right tool for untrusted
+input, and it is the only coding path in this setup that is actually contained.
 
 ### 4.3 Bindings
 
@@ -379,29 +417,33 @@ Persistent bindings live in the **top-level `bindings[]` array** — the same ar
 `discord → main`. Order matters: matching runs most-specific-first, so ACP bindings for individual
 channels must appear **before** the broad channel route.
 
+This is the shipped `#code` binding, plus an optional second one for Claude Code:
+
 ```json5
 {
   bindings: [
     // ── ACP bindings first: narrow before broad ──────────────────────────
+    // #code is the coding surface: messages there drive an OpenCode session
+    // instead of talking to the assistant.
     {
       type: "acp",
-      agentId: "code",
+      agentId: "opencode",
       match: {
         channel: "discord",
-        accountId: "default",
-        peer: { kind: "channel", id: "YOUR_DEV_CHANNEL_ID" },
+        peer: { kind: "channel", id: "YOUR_CODE_CHANNEL_ID" },
       },
-      acp: { label: "claude-main", cwd: "/Users/you/code/primary-project" },
+      acp: { label: "opencode-main" },
     },
+    // Optional second surface once `claude` is in acp.allowedAgents.
     {
       type: "acp",
-      agentId: "codeAlt",
+      agentId: "claudecode",
       match: {
         channel: "discord",
         accountId: "default",
-        peer: { kind: "channel", id: "YOUR_SCRATCH_CHANNEL_ID" },
+        peer: { kind: "channel", id: "YOUR_CLAUDE_CHANNEL_ID" },
       },
-      acp: { label: "opencode-scratch", cwd: "/Users/you/code/scratch" },
+      acp: { label: "claude-main" },
     },
 
     // ── then the existing broad route ────────────────────────────────────
@@ -409,6 +451,11 @@ channels must appear **before** the broad channel route.
   ],
 }
 ```
+
+Neither binding sets `acp.cwd`, which is deliberate: `worktree.sh` supplies an isolated `--cwd` per
+spawn, and a hardcoded binding `cwd` would quietly override it for messages that arrive outside that
+flow. If you ever bind a channel directly to a fixed directory, make sure it is a worktree and not a
+live checkout — see [§6.6](#66-containment-options-ranked).
 
 `bindings[].acp` accepts `label`, `cwd`, `mode`, and `backend`. Peer id shapes are per-channel:
 
@@ -499,7 +546,10 @@ mysteriously. `--bind here` is the simpler path and the one to reach for first.
 
 ### 5.3 Driving a coding task from your phone
 
-This is the payoff, and it is worth walking through concretely.
+This is the payoff, and it is worth walking through concretely. The examples below spawn `claude`
+because that is the harness worth building the habit on; swap in `opencode` to run them against the
+shipped `allowedAgents: ["opencode"]` as-is. A spawn naming a harness that is not in the allowlist
+fails with `ACP agent "<id>" is not allowed by policy`, which is the intended behaviour, not a bug.
 
 **A: one repo, one channel, always on.** Configure the persistent binding from
 [§4.3](#43-bindings) once. Then `#dev` in Discord *is* Claude Code in `~/code/primary-project`,
@@ -728,22 +778,43 @@ silent-fallback trap in [§4.4](#44-the-cwd-precedence-chain)). One repo per bin
 harness's *default* working set and is what makes its file operations predictable. It does not stop
 shell from leaving the directory.
 
-**3. Git worktree isolation.** OpenClaw manages worktrees under its state directory:
+**3. Git worktree isolation.** This is the boundary this project actually leans on, via
+[`worktree.sh`](../worktree.sh):
+
+```bash
+bash openclaw/worktree.sh ~/code/India-voice-ai fix-tts-latency \
+  "Diagnose the 400ms TTS gap in tts_coalesce.py and fix it. Run pytest."
+```
+
+Every session gets its own checkout on its own `agent/<slug>` branch under `~/code/worktrees`, and
+the harness is pointed there with `--cwd`. Worst case is deleting a directory and a branch; your
+working copy, staged changes, and `main` are untouched. **This is what makes
+`permissionMode: "approve-all"` defensible rather than reckless** — and pointing a session at a live
+working copy is exactly what would make it reckless again.
+
+OpenClaw also has its own managed worktrees, which are a reasonable alternative:
 
 ```bash
 openclaw worktrees create /Users/you/code/api --name acp-task --base-ref main
 openclaw worktrees list
 ```
 
-Each gets branch `openclaw/<name>` and its own checkout, with snapshot-on-removal (restorable for
-30 days) so nothing is lost. Point the ACP `cwd` at the worktree path instead of your main checkout.
+Those live under the OpenClaw state directory on branch `openclaw/<name>`, with snapshot-on-removal
+restorable for 30 days. `worktree.sh` is the simpler, more explicit path and it carries `.env`
+across (a fresh worktree otherwise fails tests in confusing ways); the managed ones give you
+snapshots and a Control UI. Either is fine. Using neither is not.
 
-Be precise about what this buys: it protects your **working tree and branch state**, not your
-machine. A worktree shares the repository's git common directory, and a harness with shell can run
-any git command it likes. It is excellent for review ergonomics and for keeping speculative agent
-work off `main`. It is not a security boundary. Note also that `.openclaw/worktree-setup.sh`, if
-present in a repo, **executes repository code** on worktree creation — one more reason the "trusted
-repos only" rule matters.
+Be precise about what this buys, because the config comment states it more absolutely than the
+mechanism supports: a worktree bounds the **expected** blast radius — your working tree and branch
+state — not your machine. A worktree shares the repository's git common directory, and a harness
+with shell access can `cd` out of it and run any command your user can. It is an excellent default
+that makes routine agent mistakes cheap and reviewable. It is not a kernel-enforced boundary, which
+is why option 1 above still sits at the top of this list.
+
+Two related traps: `.openclaw/worktree-setup.sh`, if present in a repo, **executes repository code**
+on managed-worktree creation; and `worktree.sh` copying `.env` across means **your real secrets are
+in the directory you just gave an agent write access to**. Both are consequences of the same rule —
+trusted repos only.
 
 **4. `permissionMode` and `nonInteractivePermissions`.** Real but coarse, per
 [§6.3](#63-permission-modes). Use `approve-reads` + `deny` for any read-only ACP agent; accept

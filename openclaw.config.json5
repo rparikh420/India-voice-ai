@@ -141,8 +141,69 @@
         tools: {
           profile: "messaging",
           exec: { security: "deny" },
-          deny: ["message", "browser"],   // no outbound messaging, no live browsing
+          // No outbound messaging, no live browsing, and no delegation —
+          // an agent reading hostile input must not be able to start a
+          // session that can act on what it just read.
+          deny: ["message", "browser", "sessions_spawn", "sessions_send"],
           allow: ["gmail__*"],            // gmail only — see main's note on tools.allow
+        },
+        memory: { search: { rememberAcrossConversations: false } },
+      },
+
+      // ── market: reads market data and news. CANNOT TRADE. ───────────────
+      // Same split as triage/main, for a sharper reason. Financial prompt
+      // injection is ECONOMICALLY MOTIVATED: an attacker who plants a fake
+      // filing or a manipulated sentiment piece profits directly from the
+      // trade it induces. Published red-teaming of LLM trading agents shows
+      // fabricated-news injection producing position concentration, elevated
+      // trade frequency and severe drawdowns.
+      //
+      // So the agent that reads the hostile input is not the agent that can
+      // place an order. This one analyses. `trader` executes, and only with
+      // a human in the loop.
+      market: {
+        workspace: "~/.openclaw/workspace-market",
+        // Deliberately NOT the cheap tier. This agent reads adversarial input
+        // and its output steers real money — the one place in this config
+        // where paying for a stronger model is clearly worth it.
+        model: { primary: "openrouter/moonshotai/kimi-k2.6" },
+        tools: {
+          profile: "messaging",
+          exec: { security: "deny" },
+          deny: ["sessions_spawn", "sessions_send"],
+          // Read-only market data and account state. No order tools.
+          allow: [
+            "alpaca__get_*",
+            "alpaca__list_*",
+            "alpaca__search_*",
+            "web_search",
+          ],
+        },
+        memory: { search: { rememberAcrossConversations: false } },
+      },
+
+      // ── trader: places orders. Reads nothing untrusted. ─────────────────
+      // Never point this at news, filings, forums, or `market`'s raw output.
+      // It acts on an explicit instruction from you, confirmed by you.
+      trader: {
+        workspace: "~/.openclaw/workspace-market",
+        model: { primary: "openrouter/moonshotai/kimi-k2.6" },
+        tools: {
+          profile: "messaging",
+          exec: { security: "deny" },
+          deny: ["web_search", "web_fetch", "browser", "sessions_spawn"],
+          allow: ["alpaca__*"],
+          // Every order is confirmed in chat before it fires. Without this the
+          // human-in-the-loop guarantee is a comment, not a control.
+          ask: {
+            always: [
+              "alpaca__place_order",
+              "alpaca__submit_order",
+              "alpaca__cancel_order",
+              "alpaca__close_position",
+              "alpaca__*_order",
+            ],
+          },
         },
         memory: { search: { rememberAcrossConversations: false } },
       },
@@ -215,13 +276,15 @@
     // containment. Off unless you have a specific, considered reason.
     elevated: { enabled: false },
     fs: { workspaceOnly: true },
-    // Deny wins over allow everywhere, so this is the real floor.
+    // Deny wins over allow everywhere, so this is the real floor — and that
+    // is exactly why sessions_spawn/sessions_send are NOT here. Denying them
+    // globally cannot be undone by any per-agent tools.allow, which silently
+    // disables all delegation including ACP coding sessions. They are denied
+    // per-agent on `triage` instead.
     deny: [
       "group:automation",
       "group:runtime",
       "group:fs",
-      "sessions_spawn",
-      "sessions_send",
     ],
   },
 
@@ -309,15 +372,23 @@
       acpx: {
         enabled: true,
         config: {
+          // Valid values: approve-all | approve-reads (default) | deny-all.
+          // ("strict" is NOT a permissionMode — it's an example profile name
+          // for `/acp permissions <profile>`, forwarded to the harness's own
+          // vocabulary.)
+          //
           // approve-all is only defensible because every session is confined
           // to a throwaway worktree on its own branch (worktree.sh). Point a
           // session at a live working copy with this set and it can rewrite
           // your repo unprompted.
-          //
-          // Non-interactive sessions cannot answer native permission prompts,
-          // so "strict" effectively blocks cron- and phone-driven runs — that
-          // is the real trade being made here.
           permissionMode: "approve-all",
+
+          // Separate key, easy to miss. Defaults to "fail", which combined
+          // with the default approve-reads makes EVERY write/exec session
+          // crash with PermissionPromptUnavailableError — the single most
+          // common ACP failure, because non-interactive sessions have no way
+          // to answer a native prompt.
+          nonInteractivePermissions: "fail",
         },
       },
     },
