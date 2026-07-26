@@ -184,6 +184,33 @@ case "$SANDBOX" in
                 note "unsandboxed exec needs an approvals flow — see docs/security.md" ;;
 esac
 
+SCOPE="$(openclaw config get agents.entries.dev.sandbox.scope 2>/dev/null | tr -d '"'"'"' ' || true)"
+case "$SCOPE" in
+  session) ok "'dev' sandbox scope: session" ;;
+  shared)  bad "'dev' sandbox scope is 'shared' — sessions share one container" ;;
+  *)       warn "'dev' sandbox scope is '${SCOPE:-unset}' (defaults to 'agent')"
+           note "'agent' means every dev session shares one container; prefer 'session'" ;;
+esac
+
+ELEVATED="$(openclaw config get tools.elevated.enabled 2>/dev/null | tr -d '"'"'"' ' || true)"
+if [[ "$ELEVATED" == "true" ]]; then
+  bad "tools.elevated.enabled is ON — elevated exec runs outside the sandbox"
+else
+  ok "elevated exec disabled"
+fi
+
+FSONLY="$(openclaw config get tools.fs.workspaceOnly 2>/dev/null | tr -d '"'"'"' ' || true)"
+[[ "$FSONLY" == "true" ]] && ok "filesystem access confined to workspace" \
+  || warn "tools.fs.workspaceOnly not set"
+
+ORIGINS="$(openclaw config get gateway.controlUi.allowedOrigins 2>/dev/null || true)"
+if [[ -n "$ORIGINS" && "$ORIGINS" != "null" ]]; then
+  ok "control UI allowedOrigins set"
+else
+  bad "gateway.controlUi.allowedOrigins not set (critical audit finding)"
+  note "any page on another localhost port presents a loopback origin and passes"
+fi
+
 # ── Workspace identity ──────────────────────────────────────────────────────
 sect "Workspace"
 
