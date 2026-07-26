@@ -20,6 +20,12 @@
 # This is what makes permissionMode "approve-all" a defensible setting rather
 # than a reckless one. Point a session at a live working copy instead and that
 # reasoning evaporates.
+#
+# BUT BE CLEAR ABOUT WHAT THIS IS NOT. A worktree bounds the EXPECTED blast
+# radius; it is not a security boundary. It shares the repo's git common
+# directory, and a harness with shell access can simply `cd` elsewhere. If you
+# need real isolation — untrusted code, or an agent you don't want near your
+# SSH keys — run the harness as a dedicated OS user. See docs/coding-agents.md.
 
 set -euo pipefail
 
@@ -93,14 +99,28 @@ mkdir -p "$(dirname "$WT_PATH")"
 info "creating worktree from ${START_POINT}..."
 git -C "$REPO" worktree add -b "$BRANCH" "$WT_PATH" "$START_POINT" --quiet
 
-# Carry untracked-but-needed local files across. A fresh worktree has no .env,
-# so tests that need credentials fail in confusing ways otherwise.
-for f in .env .env.local; do
-  if [[ -f "${REPO}/${f}" ]]; then
-    cp "${REPO}/${f}" "${WT_PATH}/${f}"
-    info "copied ${f}"
+# Secrets are NOT copied by default.
+#
+# A fresh worktree has no .env, so tests needing credentials fail confusingly —
+# but copying real API keys into a directory you just handed an agent write
+# access to hands those keys to anything that compromises the session. Opt in
+# per invocation, and prefer a scoped test-only .env over your live one.
+if [[ "${COPY_ENV:-0}" == "1" ]]; then
+  for f in .env .env.local; do
+    if [[ -f "${REPO}/${f}" ]]; then
+      cp "${REPO}/${f}" "${WT_PATH}/${f}"
+      info "copied ${f}  (COPY_ENV=1)"
+    fi
+  done
+  echo
+  info "WARNING: real credentials are now inside the agent's writable worktree"
+else
+  if [[ -f "${REPO}/.env" ]]; then
+    info "note: .env NOT copied. Tests needing credentials will fail."
+    info "      re-run with COPY_ENV=1, or better, drop a scoped test-only"
+    info "      .env into ${WT_PATH} by hand"
   fi
-done
+fi
 
 # A venv is per-worktree; symlinking one across worktrees causes odd failures.
 if [[ -d "${REPO}/.venv" ]]; then
