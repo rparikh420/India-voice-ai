@@ -1,0 +1,216 @@
+// OpenClaw starter config — curated personal assistant
+// Target: ~/.openclaw/openclaw.json  (JSON5: comments and trailing commas are fine)
+//
+// Do NOT copy this over an existing config blindly. Merge section by section, then run:
+//   openclaw security audit
+//   openclaw gateway restart
+//
+// Replace every ALL_CAPS placeholder before use.
+
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Gateway — locked down by default
+  // ─────────────────────────────────────────────────────────────────────────
+  gateway: {
+    bind: "loopback",              // 127.0.0.1 only; never expose directly
+    port: 18789,
+    auth: {
+      mode: "token",               // defense in depth even on loopback
+      // token: set via `openclaw config set gateway.auth.token <value>`
+      //        keep it OUT of any file you commit
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Secrets come from the environment, never inline
+  // ─────────────────────────────────────────────────────────────────────────
+  env: {
+    // OPENROUTER_API_KEY, DISCORD_BOT_TOKEN, GITHUB_TOKEN are read from the
+    // daemon's environment. On macOS set them in the launchd unit or a
+    // sourced profile — see bootstrap.sh.
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Models — tiered routing on OpenRouter
+  // Refs follow openrouter/<provider>/<model>
+  // ─────────────────────────────────────────────────────────────────────────
+  models: {
+    aliases: {
+      smart: "openrouter/moonshotai/kimi-k2.6",       // main agentic loop
+      backup: "openrouter/moonshotai/kimi-k2.5",      // bundled fallback
+      cheap: "openrouter/google/gemini-3.5-flash",    // heartbeat, triage, summaries
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Agents — three trust tiers. See README "Architecture".
+  // ─────────────────────────────────────────────────────────────────────────
+  agents: {
+    defaults: {
+      workspace: "~/.openclaw/workspace",
+      model: {
+        primary: "openrouter/moonshotai/kimi-k2.6",
+        fallback: ["openrouter/moonshotai/kimi-k2.5", "openrouter/auto"],
+      },
+    },
+
+    entries: {
+      // ── main: the assistant you talk to ──────────────────────────────────
+      // Reads calendar/notes, talks on Discord, delegates real work.
+      // No shell. This is the agent with your memory in it.
+      main: {
+        workspace: "~/.openclaw/workspace",
+        model: { primary: "openrouter/moonshotai/kimi-k2.6" },
+        tools: {
+          profile: "messaging",
+          exec: { security: "deny" },
+        },
+        mcp: { servers: ["calendar", "notion", "files"] },
+        memory: {
+          search: {
+            rememberAcrossConversations: true,
+            queryMode: "recent",
+            maxSummaryChars: 220,
+            promptStyle: "balanced",
+          },
+        },
+      },
+
+      // ── triage: reads untrusted content ──────────────────────────────────
+      // Email and web land here FIRST. Cannot execute. Cannot message out.
+      // Its output is data for `main` to act on, never instructions to follow.
+      triage: {
+        workspace: "~/.openclaw/workspace-triage",
+        model: { primary: "openrouter/google/gemini-3.5-flash" },
+        tools: {
+          profile: "messaging",
+          exec: { security: "deny" },
+          deny: ["message", "browser"],   // no outbound messaging, no live browsing
+        },
+        mcp: { servers: ["gmail"] },
+        memory: { search: { rememberAcrossConversations: false } },
+      },
+
+      // ── dev: does the work, sandboxed ────────────────────────────────────
+      // Shell allowed but contained. No email, no calendar, no personal memory.
+      dev: {
+        workspace: "~/code",
+        model: { primary: "openrouter/moonshotai/kimi-k2.6" },
+        sandbox: {
+          mode: "all",             // every session contained (needs Docker)
+          workspaceAccess: "rw",   // mounts workspace at /workspace
+        },
+        tools: {
+          profile: "full",
+          exec: { security: "allow" },   // safe only because of the sandbox above
+        },
+        mcp: { servers: ["github"] },
+        memory: { search: { rememberAcrossConversations: false } },
+      },
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Global tool policy — the floor. Per-agent settings can narrow, not widen.
+  // ─────────────────────────────────────────────────────────────────────────
+  tools: {
+    profile: "messaging",
+    exec: { security: "deny" },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Channels — Discord primary, locked to you
+  // ─────────────────────────────────────────────────────────────────────────
+  channels: {
+    discord: {
+      enabled: true,
+      token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+      dmPolicy: "pairing",         // DM access needs an approval code
+      groupPolicy: "allowlist",    // only servers listed below
+      linkPreviews: false,         // indirect prompt-injection vector — keep off
+      guilds: {
+        YOUR_SERVER_ID: {
+          requireMention: false,   // fine on a private server that's only you
+          users: ["YOUR_USER_ID"],
+        },
+      },
+      agent: "main",
+    },
+
+    // Add in Phase 7 for work. Keep it on a separate agent so work context
+    // never bleeds into personal memory.
+    // slack: {
+    //   enabled: true,
+    //   token: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+    //   dmPolicy: "allowlist",
+    //   linkPreviews: false,
+    //   agent: "dev",
+    // },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Sessions
+  // ─────────────────────────────────────────────────────────────────────────
+  session: {
+    dmScope: "per-channel-peer",   // don't merge conversations across peers
+    reset: { mode: "idle", after: "12h" },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Cron — jobs installed by cron-jobs.sh
+  // ─────────────────────────────────────────────────────────────────────────
+  cron: {
+    enabled: true,
+    sessionRetention: "24h",
+    triggers: {
+      // Leave OFF. Enabling permits headless script execution with the owning
+      // agent's full tool policy, INCLUDING exec. See README Phase 6.2.
+      enabled: false,
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Heartbeat — proactive nudges, but only during waking hours
+  // ─────────────────────────────────────────────────────────────────────────
+  heartbeat: {
+    every: "30m",
+    target: "discord:YOUR_BRIEF_CHANNEL_ID",
+    isolatedSession: true,   // ~2-5K tokens/run instead of ~100K
+    lightContext: true,
+    activeHours: { start: "08:00", end: "22:00", tz: "America/New_York" },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Memory
+  // ─────────────────────────────────────────────────────────────────────────
+  memory: {
+    search: {
+      rememberAcrossConversations: true,
+      // provider: set explicitly to use something other than the OpenAI default,
+      // e.g. "ollama" for fully local embeddings.
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Skills — treat third-party skills as untrusted code
+  // ─────────────────────────────────────────────────────────────────────────
+  skills: {
+    entries: {
+      // "email-triage": { enabled: true },
+    },
+  },
+
+  security: {
+    // installPolicy: "/usr/local/bin/vet-skill.sh",  // runs before installs proceed
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Hooks — inbound webhooks (CI, GitHub). Phase 7.
+  // ─────────────────────────────────────────────────────────────────────────
+  // hooks: {
+  //   enabled: true,
+  //   path: "/hooks",
+  //   token: "SET_VIA_CLI",
+  //   mappings: { "ci-failure": { agent: "dev", sessionKey: "ci" } },
+  // },
+}
