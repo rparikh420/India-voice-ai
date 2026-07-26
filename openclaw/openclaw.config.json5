@@ -36,9 +36,12 @@
   // ─────────────────────────────────────────────────────────────────────────
   models: {
     aliases: {
-      smart: "openrouter/moonshotai/kimi-k2.6",       // main agentic loop
-      backup: "openrouter/moonshotai/kimi-k2.5",      // bundled fallback
-      cheap: "openrouter/google/gemini-3.5-flash",    // heartbeat, triage, summaries
+      smart: "openrouter/moonshotai/kimi-k2.6",            // main agentic loop
+      backup: "openrouter/moonshotai/kimi-k2.5",           // bundled fallback
+      // NOT gemini-3.5-flash — at ~$1.50/$9.00 per M tokens it is 2.5x the
+      // input and 2.6x the output price of Kimi K2.6. "Flash" is a latency
+      // name, not a price one. Lite is the actual cheap tier.
+      cheap: "openrouter/google/gemini-3.5-flash-lite",    // heartbeat, triage, summaries
     },
   },
 
@@ -52,6 +55,24 @@
         primary: "openrouter/moonshotai/kimi-k2.6",
         fallback: ["openrouter/moonshotai/kimi-k2.5", "openrouter/auto"],
       },
+
+      // Heartbeat lives HERE, not at the top level.
+      // Trap: if any entry under agents.entries defines its own `heartbeat`
+      // block, ONLY those agents run heartbeats. Leaving it here alone keeps
+      // it on the default (main) agent.
+      heartbeat: {
+        every: "30m",
+        target: "discord",
+        to: "channel:YOUR_BRIEF_CHANNEL_ID",   // default is "none" = run but don't deliver
+        isolatedSession: true,                 // ~2-5K tokens/run instead of ~100K
+        lightContext: true,
+        // Without an explicit model here, heartbeats run on the agent's
+        // primary (Kimi K2.6) — not the cheap tier.
+        model: "openrouter/google/gemini-3.5-flash-lite",
+        // The field is `timezone`, not `tz`. start and end must differ, or the
+        // window is zero-width and every run counts as outside it.
+        activeHours: { start: "08:00", end: "22:00", timezone: "America/New_York" },
+      },
     },
 
     entries: {
@@ -64,8 +85,12 @@
         tools: {
           profile: "messaging",
           exec: { security: "deny" },
+          // MCP isolation is enforced HERE, via tools.allow globs — there is
+          // no `agents.entries.<id>.mcp.servers` key. Without these globs
+          // every agent sees every registered server, which is precisely the
+          // isolation failure the three-agent split exists to prevent.
+          allow: ["calendar__*", "notion__*", "files__*"],
         },
-        mcp: { servers: ["calendar", "notion", "files"] },
         memory: {
           search: {
             rememberAcrossConversations: true,
@@ -81,13 +106,15 @@
       // Its output is data for `main` to act on, never instructions to follow.
       triage: {
         workspace: "~/.openclaw/workspace-triage",
-        model: { primary: "openrouter/google/gemini-3.5-flash" },
+        // Highest-frequency job in the whole setup (~213 runs/mo), so the
+        // price of this line matters more than any other model choice here.
+        model: { primary: "openrouter/google/gemini-3.5-flash-lite" },
         tools: {
           profile: "messaging",
           exec: { security: "deny" },
           deny: ["message", "browser"],   // no outbound messaging, no live browsing
+          allow: ["gmail__*"],            // gmail only — see main's note on tools.allow
         },
-        mcp: { servers: ["gmail"] },
         memory: { search: { rememberAcrossConversations: false } },
       },
 
@@ -103,8 +130,12 @@
         tools: {
           profile: "full",
           exec: { security: "allow" },   // safe only because of the sandbox above
+          allow: ["github__*"],
+          // Sandboxed agents need MCP tools re-admitted inside the sandbox.
+          // Without this, github__* is invisible to dev even though
+          // `openclaw mcp probe github` reports a healthy server.
+          sandbox: { tools: { alsoAllow: ["github__*"] } },
         },
-        mcp: { servers: ["github"] },
         memory: { search: { rememberAcrossConversations: false } },
       },
     },
@@ -122,31 +153,51 @@
   // Channels — Discord primary, locked to you
   // ─────────────────────────────────────────────────────────────────────────
   channels: {
+    // Discord is an OFFICIAL PLUGIN, not core. Install it first, then restart:
+    //   openclaw plugins install @openclaw/discord
+    // Only iMessage, Telegram and WebChat ship in core.
     discord: {
       enabled: true,
       token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
       dmPolicy: "pairing",         // DM access needs an approval code
       groupPolicy: "allowlist",    // only servers listed below
-      linkPreviews: false,         // indirect prompt-injection vector — keep off
+      // There is no `linkPreviews` key. Discord's equivalent is
+      // `suppressEmbeds`, which already defaults to true. (Telegram's
+      // `linkPreview` defaults ON — that's the one that needs setting.)
+      suppressEmbeds: true,
       guilds: {
         YOUR_SERVER_ID: {
           requireMention: false,   // fine on a private server that's only you
           users: ["YOUR_USER_ID"],
         },
       },
-      agent: "main",
+      // NOTE: also enable server > Privacy Settings > Direct Messages, or the
+      // pairing code never arrives.
     },
 
-    // Add in Phase 7 for work. Keep it on a separate agent so work context
-    // never bleeds into personal memory.
+    // Add in Phase 7 for work. Schema is mode + appToken + botToken — not a
+    // single `token`. Socket mode suits a loopback-bound gateway.
     // slack: {
     //   enabled: true,
-    //   token: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+    //   mode: "socket",
+    //   appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+    //   botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
     //   dmPolicy: "allowlist",
-    //   linkPreviews: false,
-    //   agent: "dev",
+    //   unfurlLinks: false,   // already defaults false
+    //   unfurlMedia: false,
     // },
   },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Bindings — which agent handles which channel.
+  // This is the real mechanism; `channels.<x>.agent` is NOT a config key and
+  // is silently ignored. Matching runs by documented priority, most specific
+  // first, so list narrow rules before broad ones.
+  // ─────────────────────────────────────────────────────────────────────────
+  bindings: [
+    { channel: "discord", agent: "main" },
+    // { channel: "slack", agent: "dev" },   // work stays out of personal memory
+  ],
 
   // ─────────────────────────────────────────────────────────────────────────
   // Sessions
@@ -169,16 +220,8 @@
     },
   },
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Heartbeat — proactive nudges, but only during waking hours
-  // ─────────────────────────────────────────────────────────────────────────
-  heartbeat: {
-    every: "30m",
-    target: "discord:YOUR_BRIEF_CHANNEL_ID",
-    isolatedSession: true,   // ~2-5K tokens/run instead of ~100K
-    lightContext: true,
-    activeHours: { start: "08:00", end: "22:00", tz: "America/New_York" },
-  },
+  // Heartbeat is configured under agents.defaults.heartbeat above — a
+  // top-level `heartbeat` block is not read.
 
   // ─────────────────────────────────────────────────────────────────────────
   // Memory

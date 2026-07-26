@@ -147,6 +147,22 @@ for agent in main triage dev; do
   else
     warn "agent '${agent}' not found — three-agent trust split not in place"
   fi
+
+  # MCP isolation is enforced by tools.allow globs. There is no
+  # agents.entries.<id>.mcp.servers key — if the config uses one, every agent
+  # silently sees every registered server.
+  if openclaw config get "agents.entries.${agent}.mcp.servers" >/dev/null 2>&1; then
+    bad "'${agent}' uses agents.entries.${agent}.mcp.servers — not a real key"
+    note "MCP isolation must use tools.allow globs, e.g. [\"gmail__*\"]"
+    note "as written, this agent can reach EVERY registered MCP server"
+  fi
+
+  ALLOW="$(openclaw config get "agents.entries.${agent}.tools.allow" 2>/dev/null || true)"
+  if [[ -n "$ALLOW" && "$ALLOW" != "null" ]]; then
+    ok "'${agent}' has a tools.allow list"
+  else
+    warn "'${agent}' has no tools.allow — it can reach every MCP server"
+  fi
 done
 
 # The invariant: untrusted-content readers must not be able to execute.
@@ -209,12 +225,38 @@ case "$DM_POLICY" in
   *)                 warn "discord dmPolicy: ${DM_POLICY}" ;;
 esac
 
-PREVIEWS="$(openclaw config get channels.discord.linkPreviews 2>/dev/null | tr -d '"'"'"' ' || true)"
-if [[ "$PREVIEWS" == "false" ]]; then
-  ok "discord link previews disabled"
+# There is no `linkPreviews` key. Per-channel: Discord suppressEmbeds (defaults
+# true), Slack unfurlLinks/unfurlMedia (default false), Telegram linkPreview
+# (defaults ON — the one that actually needs setting).
+if openclaw config get channels.discord.linkPreviews >/dev/null 2>&1; then
+  bad "channels.discord.linkPreviews is not a real key — silently ignored"
+  note "use suppressEmbeds for Discord (already defaults to true)"
+fi
+
+EMBEDS="$(openclaw config get channels.discord.suppressEmbeds 2>/dev/null | tr -d '"'"'"' ' || true)"
+if [[ "$EMBEDS" == "false" ]]; then
+  bad "discord suppressEmbeds is off — link unfurling is an injection vector"
 else
-  warn "discord link previews not disabled"
-  note "link unfurling is an indirect prompt-injection vector"
+  ok "discord link unfurling suppressed"
+fi
+
+TG_PREVIEW="$(openclaw config get channels.telegram.linkPreview 2>/dev/null | tr -d '"'"'"' ' || true)"
+if [[ -n "$TG_PREVIEW" && "$TG_PREVIEW" != "false" ]]; then
+  bad "telegram linkPreview is on (it defaults ON) — set it false"
+fi
+
+# channels.<x>.agent does nothing; binding is the top-level bindings[] array.
+for ch in discord slack telegram; do
+  if openclaw config get "channels.${ch}.agent" >/dev/null 2>&1; then
+    bad "channels.${ch}.agent is not a real key — silently ignored"
+    note "bind agents via the top-level bindings[] array"
+  fi
+done
+
+if openclaw config get bindings >/dev/null 2>&1; then
+  ok "bindings[] present (channel to agent routing)"
+else
+  warn "no bindings[] — channels fall through to the default agent"
 fi
 
 # ── Automation ──────────────────────────────────────────────────────────────
@@ -237,15 +279,37 @@ else
   ok "cron.triggers.enabled off"
 fi
 
-HB_TARGET="$(openclaw config get heartbeat.target 2>/dev/null | tr -d '"'"'"' ' || true)"
-[[ -n "$HB_TARGET" && "$HB_TARGET" != "null" ]] \
-  && ok "heartbeat target set" \
-  || warn "heartbeat target not set"
+# Heartbeat lives at agents.defaults.heartbeat — a top-level block is not read.
+if openclaw config get heartbeat >/dev/null 2>&1; then
+  bad "top-level 'heartbeat' block found — OpenClaw does not read it"
+  note "move it under agents.defaults.heartbeat"
+fi
 
-HB_HOURS="$(openclaw config get heartbeat.activeHours 2>/dev/null || true)"
-[[ -n "$HB_HOURS" && "$HB_HOURS" != "null" ]] \
-  && ok "heartbeat activeHours set (no 3am pings)" \
-  || warn "heartbeat activeHours not set — it may ping you overnight"
+HB_TARGET="$(openclaw config get agents.defaults.heartbeat.target 2>/dev/null | tr -d '"'"'"' ' || true)"
+if [[ -n "$HB_TARGET" && "$HB_TARGET" != "null" && "$HB_TARGET" != "none" ]]; then
+  ok "heartbeat target set (${HB_TARGET})"
+else
+  warn "heartbeat target unset or 'none' — it runs but delivers nothing"
+fi
+
+HB_HOURS="$(openclaw config get agents.defaults.heartbeat.activeHours 2>/dev/null || true)"
+if [[ -n "$HB_HOURS" && "$HB_HOURS" != "null" ]]; then
+  if grep -q '"tz"' <<<"$HB_HOURS"; then
+    bad "activeHours uses 'tz' — the field is 'timezone'"
+  else
+    ok "heartbeat activeHours set (no 3am pings)"
+  fi
+else
+  warn "heartbeat activeHours not set — it may ping you overnight"
+fi
+
+# If any agent defines its own heartbeat block, ONLY those agents heartbeat.
+for agent in main triage dev; do
+  if openclaw config get "agents.entries.${agent}.heartbeat" >/dev/null 2>&1; then
+    warn "agent '${agent}' defines its own heartbeat block"
+    note "when any agent does this, ONLY those agents run heartbeats"
+  fi
+done
 
 # ── MCP ─────────────────────────────────────────────────────────────────────
 sect "MCP servers"

@@ -177,7 +177,7 @@ Model refs follow `openrouter/<provider>/<model>`.
 |---|---|---|
 | Primary | `openrouter/moonshotai/kimi-k2.6` | Main agentic loop, tool use, dev work |
 | Fallback | `openrouter/moonshotai/kimi-k2.5` | Primary unavailable |
-| Cheap | `openrouter/google/gemini-3.5-flash` | Heartbeats, triage classification, summarisation |
+| Cheap | `openrouter/google/gemini-3.5-flash-lite` | Heartbeats, triage classification, summarisation |
 | Escape hatch | `openrouter/auto` | Let OpenRouter route when you don't care |
 
 `openrouter/auto`, `kimi-k2.6`, and `kimi-k2.5` are OpenClaw's bundled fallbacks, so they resolve
@@ -314,19 +314,30 @@ Create one private server with purpose-scoped channels — this gives you free c
 OpenClaw is an MCP client, so anything with an MCP server plugs in.
 
 ```bash
-# Filesystem, scoped narrowly and read-mostly
+# Filesystem, scoped narrowly and read-mostly.
+# Note: read_file was split into read_text_file / read_media_file.
 openclaw mcp add files --command npx --arg -y \
   --arg @modelcontextprotocol/server-filesystem --arg "$HOME/Documents" \
-  --include 'read_file,list_directory'
+  --include 'read_text_file,read_media_file,list_directory'
 
-# GitHub (dev agent)
-openclaw mcp add github --command npx --arg -y --arg @modelcontextprotocol/server-github \
-  --env GITHUB_TOKEN=ghp_...
+# GitHub (dev agent). @modelcontextprotocol/server-github is DEPRECATED and
+# archived — use GitHub's own remote server.
+openclaw mcp add github --url https://api.githubcopilot.com/mcp/ \
+  --transport streamable-http --auth oauth
+openclaw mcp login github
 
 # Remote HTTP servers with OAuth
 openclaw mcp add notion --url https://mcp.notion.com/mcp --transport streamable-http --auth oauth
 openclaw mcp login notion
 ```
+
+**Registering a server does not scope it to an agent.** There is no
+`agents.entries.<id>.mcp.servers` key — isolation is enforced by `tools.allow`
+globs on each agent (`["gmail__*"]`, `["github__*"]`, …), and sandboxed agents
+need the tools re-admitted inside the sandbox via
+`tools.sandbox.tools.alsoAllow`. Skip this and every agent reaches every server,
+which defeats the entire three-agent split. See `docs/integrations.md` for the
+full three-gate model.
 
 Verify everything:
 
@@ -555,10 +566,14 @@ See `skills/README.md` for the full format reference.
 
 ```bash
 openclaw --version
-npm install -g openclaw@latest    # or re-run the install script
-openclaw gateway restart
+openclaw update                   # NOT `npm i -g` — see below
 openclaw security audit           # re-audit after every update
 ```
+
+Use `openclaw update` rather than reinstalling by hand. It detects the install
+type, runs `openclaw doctor`, and coordinates the package swap with the running
+Gateway service; a manual `npm install -g` against a supervised install can load
+core files mid-swap.
 
 Releases move fast (v2026.7.1 landed 3,063 contributions from 532 contributors). Check the
 changelog before updating — this is a project where minor versions change behaviour.

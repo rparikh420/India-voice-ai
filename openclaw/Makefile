@@ -104,9 +104,11 @@ update: ## Update OpenClaw, restart, re-audit
 	@echo "  https://github.com/openclaw/openclaw/releases"
 	@echo
 	@read -p "Continue? [y/N] " r; [[ "$$r" =~ ^[Yy]$$ ]] || exit 0; \
-	npm install -g openclaw@latest && \
-	openclaw gateway restart && \
+	openclaw update && \
 	openclaw security audit
+# `openclaw update` — not `npm i -g`. It detects the install type, runs doctor,
+# and coordinates the package swap with the running Gateway service. A manual
+# npm install against a supervised install can load core files mid-swap.
 
 .PHONY: backup
 backup: ## Encrypted backup of ~/.openclaw (needs `age`)
