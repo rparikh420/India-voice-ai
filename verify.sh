@@ -338,6 +338,60 @@ for agent in main triage dev; do
   fi
 done
 
+# ── Coding harnesses (ACP) ──────────────────────────────────────────────────
+sect "Coding harnesses (ACP)"
+
+ACP_ENABLED="$(openclaw config get acp.enabled 2>/dev/null | tr -d '"'"'"' ' || true)"
+if [[ "$ACP_ENABLED" == "true" ]]; then
+  ok "ACP enabled"
+
+  if openclaw acp doctor >/dev/null 2>&1; then
+    ok "ACP backend healthy"
+  else
+    warn "ACP backend not healthy — run: openclaw acp doctor"
+  fi
+
+  ALLOWED="$(openclaw config get acp.allowedAgents 2>/dev/null || true)"
+  if [[ -n "$ALLOWED" && "$ALLOWED" != "null" ]]; then
+    ok "acp.allowedAgents set (${ALLOWED//[$'\n' ]/})"
+  else
+    bad "acp.allowedAgents not set — any supported harness can be spawned"
+  fi
+
+  PERM="$(openclaw config get plugins.entries.acpx.config.permissionMode 2>/dev/null | tr -d '"'"'"' ' || true)"
+  case "$PERM" in
+    approve-all)
+      warn "permissionMode: approve-all"
+      note "only safe if every session runs in a throwaway worktree"
+      note "spawn via worktree.sh, never against a live working copy" ;;
+    strict)
+      ok "permissionMode: strict"
+      note "note: non-interactive sessions can't answer prompts, so cron-"
+      note "and phone-driven runs will stall" ;;
+    deny) ok "permissionMode: deny" ;;
+    *)    warn "permissionMode unset (${PERM:-none})" ;;
+  esac
+
+  if command -v opencode >/dev/null 2>&1; then
+    ok "opencode CLI on PATH"
+  else
+    bad "opencode not installed — the harness runs as its own CLI"
+    note "brew install opencode   # then: opencode -> /connect"
+  fi
+
+  # Worktree isolation is the actual containment boundary for ACP work.
+  WT_ROOT="${WORKTREE_ROOT:-$HOME/code/worktrees}"
+  if [[ -d "$WT_ROOT" ]]; then
+    WT_COUNT="$(find "$WT_ROOT" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l | tr -d ' ')"
+    ok "worktree root exists (${WT_COUNT} active)"
+  else
+    note "no worktree root yet at ${WT_ROOT} — created on first `make code`"
+  fi
+else
+  note "ACP not enabled — external coding harnesses unavailable"
+  note "enable with: make acp"
+fi
+
 # ── MCP ─────────────────────────────────────────────────────────────────────
 sect "MCP servers"
 

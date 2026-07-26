@@ -11,7 +11,9 @@ knowledge capture.
 | Gateway host | macOS laptop/desktop (native Hub app + launchd) |
 | Primary channel | Discord (personal), Slack added later for work routing |
 | Model provider | OpenRouter — Kimi K2.6 primary, cheap open models for routine work |
-| Automation scope | Inbox + calendar, dev workflow, daily life ops, knowledge + notes |
+| **Primary use** | **Coding and building — see Phase 7 and `docs/coding-*.md`** |
+| Coding harness | OpenCode via ACP, worktree-isolated with auto-approve |
+| Automation scope | Dev workflow first; inbox + calendar, life ops, knowledge alongside |
 
 ---
 
@@ -469,6 +471,49 @@ job you've thought hard about, never as a blanket setting.
 
 **Goal:** the `dev` agent does real work in a blast radius you control.
 
+> **If coding is your main use case, this is the phase that matters most — do it early.**
+> `docs/coding-agents.md` covers running external harnesses (OpenCode, Claude Code, Codex…) via
+> ACP; `docs/coding-workflows.md` covers what to actually do with them.
+
+### 7.0 Two ways to do code work
+
+| | Embedded runtime (`dev` agent) | External harness via ACP (`opencode`) |
+|---|---|---|
+| Runs | Inside OpenClaw, Docker-sandboxed | On the host, **not sandboxed** |
+| Model | Your OpenRouter routing | The harness's own config and auth |
+| Good for | Small edits, triage, git/GitHub ops, running tests | Real feature work, multi-file refactors, long sessions |
+| Containment | `sandbox.mode`, `workspaceAccess` | The `cwd` — and nothing else |
+
+**OpenClaw's sandbox policy does not wrap ACP harness execution.** A sandboxed session cannot even
+spawn one. So the containment story for coding work is *not* the sandbox — it's the working
+directory you point the harness at.
+
+That's why this setup runs every OpenCode session in a **throwaway git worktree**:
+
+```bash
+bash openclaw/worktree.sh ~/code/India-voice-ai fix-tts-latency \
+  "Diagnose the 400ms gap in tts_coalesce.py and fix it. Run pytest and report failures."
+```
+
+Each session gets its own branch and directory. The agent works freely; worst case you delete a
+directory and a branch. Your working copy, staged changes, and `main` are untouched. This is what
+makes `permissionMode: "approve-all"` defensible — and pointing a session at a live working copy
+instead is what makes it reckless.
+
+Setup:
+
+```bash
+openclaw plugins install @openclaw/acpx
+openclaw config set plugins.entries.acpx.enabled true
+/acp doctor
+
+brew install opencode      # or: curl -fsSL https://opencode.ai/install | bash
+opencode                   # then /connect and paste your OpenRouter key
+```
+
+`acp.allowedAgents: ["opencode"]` means nothing else can be spawned — including by a model that
+decides another harness would be convenient.
+
 ### 7.1 Sandbox it
 
 ```json5
@@ -658,6 +703,7 @@ ignore.
 | `Makefile` | Task runner — `make help` for the setup order |
 | `bootstrap.sh` | Guided install + hardening for macOS |
 | `verify.sh` | Read-only end-to-end setup check — `make verify` |
+| `worktree.sh` | Spawn an OpenCode session in an isolated git worktree |
 | `openclaw.config.json5` | Full starter config: 3 agents, tiered models, locked-down channels |
 | `cron-jobs.sh` | Installs the starter automation set |
 | `workspace/SOUL.md` | Persona and boundaries |
@@ -665,6 +711,8 @@ ignore.
 | `workspace/USER.md` | Your profile — **fill this in properly** |
 | `workspace/AGENTS.md` | Operating instructions |
 | `skills/` | Six custom skills + format reference |
+| `docs/coding-agents.md` | ACP harnesses — OpenCode setup, sessions, the sandbox gap |
+| `docs/coding-workflows.md` | Driving code from chat, parallel worktrees, review loops |
 | `docs/channels.md` | Discord depth, full Slack walkthrough, voice and mobile |
 | `docs/integrations.md` | MCP wiring for Gmail, Calendar, Notion, GitHub |
 | `docs/security.md` | Threat model, injection test suite, incident response |
