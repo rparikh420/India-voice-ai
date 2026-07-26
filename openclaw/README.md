@@ -80,6 +80,23 @@ Rule of thumb: **content that arrives from outside never reaches an agent that c
 touches code in a sandbox. This is the pattern the OpenClaw security docs describe as running
 untrusted content in a low-privilege agent, and it costs you nothing but config.
 
+The split works because summarization is a **serialization boundary** — an attacker who controls
+an email body does not control the summary `triage` emits, so they lose control of exact tokens
+before anything reaches an agent with tools. That blunts injection; it does not eliminate it.
+
+Three limits to hold in mind from the start:
+
+- **Isolation is enforced by `tools.allow` globs, not by which servers you registered.** There is
+  no `agents.entries.<id>.mcp.servers` key. Omit a glob and that agent inherits *every* registered
+  MCP server. This control fails **open**.
+- **MCP servers are not sandboxed.** Containment covers `exec`, `read`, `write`, `edit`,
+  `apply_patch`, and `process` — not MCP. Servers and plugins run in-process with Gateway
+  credentials, so a compromised MCP server is outside the blast-radius model entirely. This is the
+  largest un-mitigated gap in the architecture.
+- **`triage` runs the cheapest model on the most hostile input.** A deliberate trade, documented
+  in the config and in `docs/security.md` §7, with a condition attached: widen `triage`'s tools and
+  you upgrade its model in the same commit.
+
 ---
 
 ## Phase 1 — Install and harden the Gateway
@@ -121,10 +138,15 @@ This is the step people skip and regret. Apply the baseline from `openclaw.confi
   gateway: {
     bind: "loopback",              // 127.0.0.1 only — not reachable from your LAN
     auth: { mode: "token" },       // defense in depth if bind ever changes
+    controlUi: { allowedOrigins: ["http://127.0.0.1:18789"] },
   },
   tools: {
     profile: "messaging",          // minimal tool surface by default
-    exec: { security: "deny" },    // no shell on the default agent
+    exec: { security: "deny", ask: "always" },
+    elevated: { enabled: false },  // elevated exec bypasses the sandbox entirely
+    fs: { workspaceOnly: true },
+    deny: ["group:automation", "group:runtime", "group:fs",
+           "sessions_spawn", "sessions_send"],
   },
   session: { dmScope: "per-channel-peer" },
 }
@@ -138,10 +160,18 @@ openclaw security audit --fix    # tightens file perms to 600/700
 openclaw gateway status          # expect: listening on 127.0.0.1:18789
 ```
 
-**Known risk worth understanding:** the Gateway has had reports of missing WebSocket origin
-validation, which means a malicious web page you visit can in principle reach `localhost:18789`
-from inside your own browser — loopback binding alone does not stop this. Keep `auth.mode: "token"`
-on, keep OpenClaw updated (Phase 9), and don't assume "it's only local" means "it's unreachable."
+**Known risk worth understanding.** Missing WebSocket origin validation was
+[CVE-2026-25253](https://nvd.nist.gov/vuln/detail/CVE-2026-25253) (CVSS 8.8): a malicious web page
+could reach `localhost:18789` from inside your own browser and exfiltrate the gateway token, giving
+RCE. **Fixed in v2026.1.29**, so any current v2026.7.x install is patched.
+
+The residual still matters. Current validation accepts a request when *both* origin and request are
+loopback — so any page served from another localhost port (a dev server, a stray
+`python -m http.server` in your downloads folder) presents a loopback origin and passes. Set
+`gateway.controlUi.allowedOrigins` explicitly; its absence is itself a critical audit finding.
+`docs/security.md` T12 has a curl one-liner that tests both cases.
+
+Loopback binding is not an access control. Keep `auth.mode: "token"` on and keep OpenClaw updated.
 
 ### 1.5 macOS Hub app
 

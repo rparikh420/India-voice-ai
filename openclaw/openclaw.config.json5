@@ -19,6 +19,17 @@
       // token: set via `openclaw config set gateway.auth.token <value>`
       //        keep it OUT of any file you commit
     },
+    controlUi: {
+      // CVE-2026-25253 (CVSS 8.8, missing Origin validation -> token
+      // exfiltration -> RCE) was fixed in v2026.1.29. The residual: current
+      // validation accepts a request when BOTH origin and request are
+      // loopback, so any page served from another localhost port — a dev
+      // server, a stray `python -m http.server` — presents a loopback origin
+      // and passes. Setting this explicitly closes that.
+      // Its absence is itself a critical audit finding
+      // (gateway.control_ui.allowed_origins_required).
+      allowedOrigins: ["http://127.0.0.1:18789"],
+    },
   },
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -106,8 +117,26 @@
       // Its output is data for `main` to act on, never instructions to follow.
       triage: {
         workspace: "~/.openclaw/workspace-triage",
-        // Highest-frequency job in the whole setup (~213 runs/mo), so the
-        // price of this line matters more than any other model choice here.
+        // TENSION — read before changing anything about this agent.
+        // Highest-frequency job in the setup (~213 runs/mo), so price matters
+        // more here than anywhere else. But OpenClaw's own security guidance
+        // says NOT to use weaker/smaller tiers for tool-enabled agents or
+        // untrusted inboxes, and `models.small_params` is a critical audit
+        // check. This is the cheapest model in the config reading the most
+        // hostile input.
+        //
+        // Accepted because the defense here is the POLICY, not the model's
+        // judgement: exec denied, no `message` tool, gmail-only allowlist, no
+        // cross-conversation memory. A fully persuaded triage still cannot
+        // act — it can only write a summary.
+        //
+        // The residual risk is that summary: it flows to `main`, so a
+        // persuaded triage carries the attack forward one hop. Summarization
+        // blunts this (the attacker loses control of exact tokens) but does
+        // not eliminate it.
+        //
+        // CONDITION: if you ever widen this agent's tools, upgrade the model
+        // in the same commit.
         model: { primary: "openrouter/google/gemini-3.5-flash-lite" },
         tools: {
           profile: "messaging",
@@ -126,6 +155,14 @@
         sandbox: {
           mode: "all",             // every session contained (needs Docker)
           workspaceAccess: "rw",   // mounts workspace at /workspace
+          // Third axis, easy to miss: default is "agent", which means every
+          // dev session shares ONE container. "session" isolates per session.
+          // Never "shared".
+          scope: "session",
+          // Docker sandboxes default to network: "none", plus read-only root
+          // and all caps dropped. So `npm install` and `git push` fail inside
+          // dev. That's expected, not a bug — grant network deliberately for
+          // the specific jobs that need it.
         },
         tools: {
           profile: "full",
@@ -146,7 +183,22 @@
   // ─────────────────────────────────────────────────────────────────────────
   tools: {
     profile: "messaging",
-    exec: { security: "deny" },
+    exec: {
+      security: "deny",
+      ask: "always",         // if exec is ever re-enabled, it still asks first
+    },
+    // Elevated exec runs OUTSIDE the sandbox — it punches straight through
+    // containment. Off unless you have a specific, considered reason.
+    elevated: { enabled: false },
+    fs: { workspaceOnly: true },
+    // Deny wins over allow everywhere, so this is the real floor.
+    deny: [
+      "group:automation",
+      "group:runtime",
+      "group:fs",
+      "sessions_spawn",
+      "sessions_send",
+    ],
   },
 
   // ─────────────────────────────────────────────────────────────────────────
