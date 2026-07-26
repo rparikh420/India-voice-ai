@@ -1,0 +1,32 @@
+# Never commit a live OpenClaw config — it holds tokens, API keys, and
+# channel credentials. Only the placeholder template belongs in git.
+openclaw.json
+openclaw.json5
+!openclaw.config.json5
+*.bak
+*.bak.*
+
+# Real secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets/
+
+# Encrypted backups (contain credentials and private transcripts)
+*.tar.gz.age
+*.tar.gz.gpg
+
+# A filled-in USER.md is personal. Keep the template tracked; if you fill it
+# in directly here rather than in ~/.openclaw/workspace/, uncomment this:
+# workspace/USER.md
+
+# Long-term memory is personal — never commit it
+workspace/MEMORY.md
+
+# Local state
+*.sqlite
+*.sqlite-journal
+*.log
+.DS_Store
