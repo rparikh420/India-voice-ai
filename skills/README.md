@@ -75,15 +75,15 @@ These are plain directories. Copy them in:
 
 ```bash
 mkdir -p ~/.openclaw/workspace/skills
-cp -r openclaw/skills/*/ ~/.openclaw/workspace/skills/
+cp -r skills/*/ ~/.openclaw/workspace/skills/
 ```
 
 Or let the CLI do it, which validates and lets you rename:
 
 ```bash
-openclaw skills install ./openclaw/skills/email-triage
-openclaw skills install ./openclaw/skills/deploy-runbook --as deploy --agent dev
-openclaw skills install ./openclaw/skills/weekly-review --global   # shared managed dir
+openclaw skills install ./skills/email-triage
+openclaw skills install ./skills/deploy-runbook --as deploy --agent dev
+openclaw skills install ./skills/weekly-review --global   # shared managed dir
 ```
 
 Then check them:

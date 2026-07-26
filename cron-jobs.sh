@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Starter automation set for OpenClaw (Phase 6).
 #
-#   bash openclaw/cron-jobs.sh
+#   bash ./cron-jobs.sh
 #
 # Every job runs in an ISOLATED session (~2-5K tokens/run instead of ~100K from
 # the accumulated main session) and is written to be idempotent: because the

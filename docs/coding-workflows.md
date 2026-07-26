@@ -1174,14 +1174,14 @@ Consistent with [`cron-jobs.sh`](../cron-jobs.sh). Note the flags: **`--announce
 --to "channel:<id>"`**, not `--deliver`/`--target` (`--deliver` survives as a deprecated alias for
 `--announce`; `--target` is not a flag at all — see [`operations.md`](operations.md) corrections).
 
-Save as `openclaw/cron-jobs-dev.sh` and run it separately, so you can add dev automation without
+Save as `cron-jobs-dev.sh` and run it separately, so you can add dev automation without
 reinstalling the personal set.
 
 ```bash
 #!/usr/bin/env bash
 # Development-focused automation. Companion to cron-jobs.sh.
 #
-#   bash openclaw/cron-jobs-dev.sh
+#   bash ./cron-jobs-dev.sh
 #
 # Every job runs ISOLATED (~2-5K tokens/run instead of ~100K) and is idempotent:
 # the gateway sleeps when the laptop sleeps, so jobs summarise "what I missed"

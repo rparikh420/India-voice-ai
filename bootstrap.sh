@@ -4,7 +4,7 @@
 # This is deliberately interactive and stops at each gate. It does NOT blindly
 # overwrite an existing config. Run it from the repo root:
 #
-#   bash openclaw/bootstrap.sh
+#   bash ./bootstrap.sh
 #
 set -euo pipefail
 
@@ -144,9 +144,9 @@ cat <<'EOF'
   Next steps:
     openclaw dashboard              # Control UI, send a first message
     openclaw mcp doctor --probe     # after adding MCP servers (Phase 5)
-    bash openclaw/cron-jobs.sh      # install automations (Phase 6)
+    bash ./cron-jobs.sh      # install automations (Phase 6)
 
-  Follow openclaw/README.md from Phase 2 onward.
+  Follow README.md from Phase 2 onward.
 
 EOF
 bold "Bootstrap complete."

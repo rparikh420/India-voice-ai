@@ -1,8 +1,24 @@
 # OpenClaw E2E Setup Plan — Curated Personal AI Assistant
 
-A complete, opinionated blueprint for standing up **OpenClaw v2026.7.x** as an always-available
-personal assistant that handles inbox + calendar, developer workflow, daily life ops, and
-knowledge capture.
+A complete, opinionated blueprint for standing up **OpenClaw v2026.7.x** as a development-first
+personal assistant: coding agents, inbox + calendar, daily life ops, knowledge capture, and
+market monitoring.
+
+## Get it
+
+```bash
+git clone -b openclaw https://github.com/rparikh420/India-voice-ai.git openclaw-setup
+cd openclaw-setup
+make help          # setup order
+make install       # guided install + hardening (macOS)
+```
+
+Everything here is at the repo root — nothing to `cd` into. Start with `make help`, then follow
+the phases below. `make verify` tells you what's still missing at any point.
+
+> Read Phase 1 before running anything against real accounts. The defaults in
+> `openclaw.config.json5` are locked down deliberately, and several of the loosest-looking
+> settings have a specific reason recorded in a comment next to them.
 
 **Target profile (decided up front):**
 
@@ -250,7 +266,7 @@ starter versions are in `workspace/` here.
 Copy them in:
 
 ```bash
-cp openclaw/workspace/*.md ~/.openclaw/workspace/
+cp workspace/*.md ~/.openclaw/workspace/
 ```
 
 **The highest-leverage thing you will do in this entire plan** is spend an hour writing a real
@@ -491,7 +507,7 @@ directory you point the harness at.
 That's why this setup runs every OpenCode session in a **throwaway git worktree**:
 
 ```bash
-bash openclaw/worktree.sh ~/code/India-voice-ai fix-tts-latency \
+bash ./worktree.sh ~/code/India-voice-ai fix-tts-latency \
   "Diagnose the 400ms gap in tts_coalesce.py and fix it. Run pytest and report failures."
 ```
 

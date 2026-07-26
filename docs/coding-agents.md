@@ -782,7 +782,7 @@ shell from leaving the directory.
 [`worktree.sh`](../worktree.sh):
 
 ```bash
-bash openclaw/worktree.sh ~/code/India-voice-ai fix-tts-latency \
+bash ./worktree.sh ~/code/India-voice-ai fix-tts-latency \
   "Diagnose the 400ms TTS gap in tts_coalesce.py and fix it. Run pytest."
 ```
 

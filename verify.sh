@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Verify an OpenClaw setup end to end.
 #
-#   bash openclaw/verify.sh
+#   bash ./verify.sh
 #
 # Read-only: inspects state and reports. Never modifies config, never prints
 # secret values (only whether they are set).
@@ -45,7 +45,7 @@ if has openclaw; then
   ok "openclaw $(openclaw --version 2>/dev/null || echo '(version unknown)')"
 else
   bad "openclaw not on PATH"
-  echo; echo "Nothing else to check. Run: bash openclaw/bootstrap.sh"; exit 1
+  echo; echo "Nothing else to check. Run: bash ./bootstrap.sh"; exit 1
 fi
 
 if has docker && docker info >/dev/null 2>&1; then
@@ -294,7 +294,7 @@ if [[ -n "$CRON_OUT" ]]; then
   JOB_COUNT="$(grep -cE '^\s*[0-9a-zA-Z_-]{6,}' <<<"$CRON_OUT" || echo 0)"
   ok "cron jobs installed (~${JOB_COUNT})"
 else
-  warn "no cron jobs found — run: bash openclaw/cron-jobs.sh"
+  warn "no cron jobs found — run: bash ./cron-jobs.sh"
 fi
 
 TRIGGERS="$(openclaw config get cron.triggers.enabled 2>/dev/null | tr -d '"'"'"' ' || true)"

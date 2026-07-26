@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Spawn an OpenCode ACP session inside a throwaway git worktree.
 #
-#   bash openclaw/worktree.sh <repo-path> <task-slug> ["task description"]
+#   bash ./worktree.sh <repo-path> <task-slug> ["task description"]
 #
 # Example:
-#   bash openclaw/worktree.sh ~/code/India-voice-ai fix-tts-latency \
+#   bash ./worktree.sh ~/code/India-voice-ai fix-tts-latency \
 #     "Diagnose the 400ms TTS gap in tts_coalesce.py and fix it. Run pytest."
 #
 # WHY THIS EXISTS
