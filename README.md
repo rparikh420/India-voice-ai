@@ -489,8 +489,25 @@ Highest source wins.
 openclaw skills install @owner/slug            # from ClawHub
 openclaw skills install @owner/slug --global
 openclaw skills verify @owner/slug             # checks the trust envelope
+openclaw skills check                          # missing bins/env/config — run after copying skills in
 openclaw skills update --all
 ```
+
+Three format details that bite:
+
+- **`description` is load-bearing.** Only the skill *list* — name, description, location — enters
+  the system prompt; the body loads on demand. If the description doesn't describe when to reach
+  for the skill, it never triggers. Keep it to one line under 160 characters.
+- **`metadata` is not plain YAML.** It's parsed as YAML, then flattened to a string and re-parsed
+  as JSON5. Write it in the JSON5 shape the docs use. A hand-written YAML mapping under `metadata:`
+  is the standard way to get silent gating failures.
+- **Skills cannot restrict their own tools.** There's no `allowed-tools` field — that's a Claude
+  Code thing, not an OpenClaw one. A skill that shouldn't touch the shell can't enforce that
+  itself; agent tool policy and the sandbox have to.
+
+Also worth knowing: per-agent `skills` allowlists **replace** the defaults rather than merging with
+them, and `skills.entries.<name>.env` / `apiKey` inject into the host process only — a sandboxed
+`dev` agent won't see them, so pass secrets through container setup instead.
 
 ### 8.1 Treat community skills as untrusted code
 
@@ -499,16 +516,36 @@ access or fetches and executes remote code at runtime. `openclaw skills verify` 
 trust envelope and exits non-zero on failure — wire it into your update routine. Consider
 `security.installPolicy` to run a trusted policy command before installs proceed.
 
-Skills snapshot at session start, so changes land in the *next* session.
+**Know where the trust check stops.** Risky community releases require an explicit
+`--acknowledge-clawhub-risk` flag, which is good. But official publishers and bundled sources
+bypass verification entirely — "official" is a publisher claim, not an audit. Read those too.
+
+Skills snapshot at session start, so changes land in the *next* session. There is a mid-session
+refresh when `SKILL.md` files change or a new node connects, but don't rely on it while iterating —
+restart the session to test.
 
 ### 8.2 Write your own
 
 The highest-value skills are the ones nobody else can write: how *you* want your email triaged,
-your project's deploy runbook, your writing voice. Start with three:
+your project's deploy runbook, your writing voice. Six are included in `skills/` — copy them in
+with `make skills`, then edit. They are starting points, not finished products; the rules in them
+are guesses about your preferences until you correct them.
 
-- `email-triage` — your actual rules for what's urgent
-- `meeting-notes` — your format, your action-item conventions
-- `deploy-runbook` — this repo's deploy steps, encoded
+| Skill | Agent | What it encodes |
+|---|---|---|
+| `email-triage` | `triage` | Urgent/Reply/FYI/Noise rules, draft-never-send, injection reporting |
+| `morning-brief` | `main` | Brief assembly, ordered by decision-need, with asleep-laptop catch-up |
+| `meeting-notes` | `main` | Note structure, action items with owners and dates, Notion filing |
+| `weekly-review` | `main` | Weekly retro plus memory curation against `MEMORY.md` |
+| `deploy-runbook` | `dev` | This repo's deploy path, as a worked example to adapt |
+| `escalation-policy` | all | One interrupt/queue/silent rule shared by every proactive path |
+
+`escalation-policy` is the one to read first. Every proactive path — the 30-minute heartbeat, six
+cron jobs, triage output, CI webhooks — independently decides whether to speak, and the failure
+mode is silent: nobody reports a slightly noisy assistant, they just stop reading it, and then
+none of the rest of this matters.
+
+See `skills/README.md` for the full format reference.
 
 ---
 
@@ -573,13 +610,20 @@ ignore.
 | File | What it is |
 |---|---|
 | `README.md` | This plan |
+| `Makefile` | Task runner — `make help` for the setup order |
 | `bootstrap.sh` | Guided install + hardening for macOS |
+| `verify.sh` | Read-only end-to-end setup check — `make verify` |
 | `openclaw.config.json5` | Full starter config: 3 agents, tiered models, locked-down channels |
 | `cron-jobs.sh` | Installs the starter automation set |
 | `workspace/SOUL.md` | Persona and boundaries |
 | `workspace/IDENTITY.md` | Name and vibe |
 | `workspace/USER.md` | Your profile — **fill this in properly** |
 | `workspace/AGENTS.md` | Operating instructions |
+| `skills/` | Six custom skills + format reference |
+| `docs/channels.md` | Discord depth, full Slack walkthrough, voice and mobile |
+| `docs/integrations.md` | MCP wiring for Gmail, Calendar, Notion, GitHub |
+| `docs/security.md` | Threat model, injection test suite, incident response |
+| `docs/operations.md` | Cadence, cost model, troubleshooting, VPS migration |
 
 ---
 
