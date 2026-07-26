@@ -147,6 +147,30 @@
         memory: { search: { rememberAcrossConversations: false } },
       },
 
+      // ── opencode: external coding harness via ACP ────────────────────────
+      // NOT an OpenClaw agent in the usual sense — OpenClaw is only the
+      // control plane here. OpenCode runs as its own CLI on the host with its
+      // own model config, its own auth, and its own permission model.
+      //
+      // READ THIS: OpenClaw's sandbox does NOT wrap ACP execution. The
+      // `sandbox` block that protects `dev` does nothing for this agent.
+      // Containment comes from `cwd` alone — which is why every session is
+      // pointed at a throwaway git worktree (see worktree.sh) rather than a
+      // live working copy.
+      opencode: {
+        runtime: {
+          type: "acp",
+          acp: {
+            agent: "opencode",
+            backend: "acpx",
+            mode: "persistent",       // survives gateway restarts
+            // Default parent dir for sessions. worktree.sh overrides this
+            // per-spawn with --cwd pointing at an isolated worktree.
+            cwd: "~/code/worktrees",
+          },
+        },
+      },
+
       // ── dev: does the work, sandboxed ────────────────────────────────────
       // Shell allowed but contained. No email, no calendar, no personal memory.
       dev: {
@@ -247,9 +271,57 @@
   // first, so list narrow rules before broad ones.
   // ─────────────────────────────────────────────────────────────────────────
   bindings: [
+    // Most specific first — matching runs by priority.
+    // #code is the coding surface: messages there drive an OpenCode session
+    // instead of talking to the assistant.
+    {
+      type: "acp",
+      agentId: "opencode",
+      match: {
+        channel: "discord",
+        peer: { kind: "channel", id: "YOUR_CODE_CHANNEL_ID" },
+      },
+      acp: { label: "opencode-main" },
+    },
     { channel: "discord", agent: "main" },
     // { channel: "slack", agent: "dev" },   // work stays out of personal memory
   ],
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // ACP — external coding harnesses
+  //   openclaw plugins install @openclaw/acpx
+  //   openclaw config set plugins.entries.acpx.enabled true
+  //   /acp doctor
+  // OpenCode itself must be installed and authenticated separately:
+  //   brew install opencode      (or: curl -fsSL https://opencode.ai/install | bash)
+  //   opencode           -> /connect, paste the OpenRouter key
+  // ─────────────────────────────────────────────────────────────────────────
+  acp: {
+    enabled: true,
+    dispatch: { enabled: true },
+    // Allowlist. Anything not listed cannot be spawned, including by a
+    // model that decides it would be convenient.
+    allowedAgents: ["opencode"],
+  },
+
+  plugins: {
+    entries: {
+      acpx: {
+        enabled: true,
+        config: {
+          // approve-all is only defensible because every session is confined
+          // to a throwaway worktree on its own branch (worktree.sh). Point a
+          // session at a live working copy with this set and it can rewrite
+          // your repo unprompted.
+          //
+          // Non-interactive sessions cannot answer native permission prompts,
+          // so "strict" effectively blocks cron- and phone-driven runs — that
+          // is the real trade being made here.
+          permissionMode: "approve-all",
+        },
+      },
+    },
+  },
 
   // ─────────────────────────────────────────────────────────────────────────
   // Sessions

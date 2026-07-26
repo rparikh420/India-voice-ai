@@ -22,7 +22,8 @@ help: ## Show this help
 	  | sort \
 	  | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 	@echo
-	@echo "Setup order:  install -> secrets -> skills -> cron -> verify"
+	@echo "Setup order:  install -> secrets -> skills -> acp -> cron -> verify"
+	@echo "Coding:       make code REPO=~/code/proj SLUG=fix-thing TASK=\"...\""
 
 # ── Setup ───────────────────────────────────────────────────────────────────
 
@@ -52,6 +53,38 @@ identity: ## Copy SOUL/IDENTITY/USER/AGENTS into the workspace (never overwrites
 .PHONY: cron
 cron: ## Install the starter automation set
 	bash cron-jobs.sh
+
+.PHONY: acp
+acp: ## Install the ACP backend for external coding harnesses
+	openclaw plugins install @openclaw/acpx
+	openclaw config set plugins.entries.acpx.enabled true
+	@echo
+	@echo "Now install and authenticate OpenCode itself:"
+	@echo "  brew install opencode      # or curl -fsSL https://opencode.ai/install | bash"
+	@echo "  opencode                   # then /connect, paste your OpenRouter key"
+	@echo
+	@echo "Then check readiness:  make acp-doctor"
+
+.PHONY: acp-doctor
+acp-doctor: ## Check ACP backend health
+	openclaw acp doctor
+
+# ── Coding ──────────────────────────────────────────────────────────────────
+
+.PHONY: code
+code: ## Spawn an OpenCode session in a fresh worktree. REPO=~/code/x SLUG=fix-y [TASK="..."]
+	@test -n "$(REPO)" || { echo 'usage: make code REPO=~/code/proj SLUG=fix-thing [TASK="..."]'; exit 1; }
+	@test -n "$(SLUG)" || { echo 'usage: make code REPO=~/code/proj SLUG=fix-thing [TASK="..."]'; exit 1; }
+	bash worktree.sh "$(REPO)" "$(SLUG)" "$(TASK)"
+
+.PHONY: sessions
+sessions: ## List active ACP coding sessions
+	openclaw acp status
+
+.PHONY: worktrees
+worktrees: ## List agent worktrees across repos
+	@find "$${WORKTREE_ROOT:-$$HOME/code/worktrees}" -mindepth 2 -maxdepth 2 -type d 2>/dev/null \
+	  | sed 's|^|  |' || echo "  none"
 
 # ── Verify ──────────────────────────────────────────────────────────────────
 
